@@ -1,0 +1,329 @@
+#!/usr/bin/env python
+# -*- coding: utf-8; -*-
+"""Manage a local repository of GRACE L1B data product files.
+
+Level1B (L1B) data from the satellite mission GRACE is publicly made available
+online. In order to process this data it is handy to download it to the local
+system and this application intends to ease this process.
+
+What does it do?
+If you wish to process GRACE L1B data you need to download the existing data
+products to the local machine for the date ranges that you wish to process.
+getL1B is designed to do exactly that automatically.
+
+Why not just download the whole public ftp?
+If you have a couple hundred GB available and you dont mind waiting a week to
+download the whole thing, go ahead!
+If you don't, then getL1B will help you by making ensuring that the data
+products you require are made available in the local machine.
+
+I am still not convinced ...
+Another advantage of getL1B is that it can be called from your data processing
+scripts. Because it does all its magic automatically, it means that you no
+longer have to make sure that you have all the data available before you start
+processing.
+"""
+
+__author__ = "Pedro Inácio"
+__copyright__ = "Copyright 2015"
+__version__ = "1.0"
+__maintainer__ = "Pedro Inácio"
+__email__ = "pedro@inacio.space"
+__status__ = "Development"
+
+# Load modules
+from os import path, makedirs
+from utils import *
+from datetime import timedelta
+import argparse
+
+
+class LocalRepository(object):
+    """Group tasks related to the local repository.
+
+    A LocalRepository instance is created with an optional path.
+    If no path is specified, the class default is used.
+    """
+
+    # Default repository path
+    DEF_PATH = "/home/pmginacio/data/L1B"
+
+    # Store repository path in this file for next run
+    DEF_CFG_FILE = path.expanduser(path.join("~", ".l1brepo"))
+
+    def __init__(self, rpath=None):
+        """Initialize the local repository
+
+        The optional argument specifies the path of the local repository.
+        If not specified, a configuration file is inspected to check whether a
+        repository already exists. If no local repository is found, a new one
+        is created at the default path. In that situation, the user must
+        confirm the creation of the new repository.
+        """
+        super(LocalRepository, self).__init__()
+
+        # If path was provided, use it
+        if rpath:
+            self.rpath = rpath
+        # If path is not provided but a config file exists, load it
+        elif path.isfile(LocalRepository.DEF_CFG_FILE):
+            with open(LocalRepository.DEF_CFG_FILE, 'r') as f:
+                self.rpath = f.read()
+        # If there is no config file, assume the default
+        else:
+            self.rpath = LocalRepository.DEF_PATH
+
+        # Check the local repository is ready to receive data
+        self.check()
+
+        # Store its location on the config file for later use
+        with open(LocalRepository.DEF_CFG_FILE, 'w') as f:
+            f.write(self.rpath)
+
+    def check(self):
+        """Check the repository exist and request permision to create a new one
+        otherwise
+        """
+
+        if not path.isdir(self.rpath):
+            print "Detected request for new local repository."
+            print "The new repository will be created at:"
+            print "\t"+self.rpath
+            if not confirm("Would you like to proceed?"):
+                exit(0)
+
+            print "Building directory structure ..."
+            makedirs(self.rpath)
+
+
+class ProductFile(object):
+    """This class is used to instance each requested product, to copute the
+    filenames associated with each product and the routines to make the product
+    files available in the local repository.
+    """
+
+    # Define external repository
+    EXT_REP = "ftp://podaac-ftp.jpl.nasa.gov/allData/grace/L1B"
+
+    # Relative path in the external rep of the AOD1B and all other products
+    AOD_PATH = "GFZ/AOD1B/RL"
+    JPL_PATH = "JPL/RL"
+
+    # Define the default release versions to be use
+    DEF_AOD_RL = 5
+    DEF_JPL_RL = 2
+
+    # Define list of available products
+    LIST_L1B_PRODS = ['ACC1B', 'AHK1B', 'AOD1B', 'CLK1B', 'GNV1B', 'GPS1B',
+                      'IHK1B', 'KBR1B', 'MAG1B', 'MAS1B', 'OCN1B', 'SCA1B',
+                      'TDP1B', 'THR1B', 'TIM1B', 'TNK1B', 'USO1B']
+
+    def __init__(self, repo, ptype, pdate, aodrl, jplrl):
+        super(ProductFile, self).__init__()
+        """Instance a new product to be made available.
+
+        The following input arguments are expected,
+            repo  - an instance of LocalRepository
+            ptype - type of product, must exist in LIST_L1B_PRODS
+            pdate - requeste date
+            aodrl - integer specifying the desired AOD1B product release
+                    version
+            jplrl - integer specifying the desired release version of remaining
+                    product
+        """
+
+        self.rpath = repo.rpath
+        # check product
+        if ptype.upper() not in ProductFile.LIST_L1B_PRODS:
+            raise ValueError("Wrong product type: "+ptype.upper())
+        else:
+            self.ptype = ptype.upper()
+        self.pdate = pdate
+        self.aodrl = str(aodrl).zfill(2)
+        self.jplrl = str(jplrl).zfill(2)
+
+    def get_remote_tar_file(self):
+        """Compute the remote tar file based on the requested attributes"""
+
+        if self.ptype == "AOD1B":
+            pdir = path.join(ProductFile.EXT_REP, ProductFile.AOD_PATH +
+                             self.aodrl)
+            pfile = ('AOD1B_' + self.pdate.strftime('%Y-%m') +
+                     '_' + self.aodrl + '.tar.gz')
+        else:
+            pdir = path.join(ProductFile.EXT_REP, ProductFile.JPL_PATH +
+                             self.jplrl, str(self.pdate.year))
+            pfile = ('grace_1B_' + self.pdate.strftime('%Y-%m-%d') +
+                     '_' + self.jplrl + '.tar.gz')
+
+        return path.join(pdir, pfile)
+
+    def get_local_tar_file(self):
+        """Compute the local tar file based on the requested attributes"""
+
+        if self.ptype == "AOD1B":
+            pfile = ('AOD1B_'+self.pdate.strftime('%Y-%m') +
+                     '_' + self.aodrl + '.tar.gz')
+        else:
+            pfile = ('grace_1B_' + self.pdate.strftime('%Y-%m-%d') +
+                     '_' + self.jplrl + '.tar.gz')
+
+        return path.join(self.rpath, '.tmp', pfile)
+
+    def get_list_product_files(self):
+        """Compute the local product file based on the requested attributes"""
+
+        # AOD1B product only has one file and specific release version
+        if self.ptype == "AOD1B":
+            pdir = path.join(self.rpath, self.ptype, 'RL' + self.aodrl)
+            pfiles = [self.ptype + '_' + self.pdate.strftime('%Y-%m-%d') +
+                      "_X_" + self.aodrl + ".asc"]
+
+        # KBR1B product only has one file
+        elif self.ptype == "KBR1B":
+            pdir = path.join(self.rpath, self.ptype, 'RL' + self.jplrl)
+            pfiles = [self.ptype + '_' + self.pdate.strftime('%Y-%m-%d') +
+                      "_X_" + self.jplrl + ".dat"]
+
+        # Other products consist of one file per satellite, i.e., 2 files
+        else:
+            pdir = path.join(self.rpath, self.ptype, 'RL' + self.jplrl)
+            pfiles = [self.ptype+'_'+self.pdate.strftime('%Y-%m-%d') + "_" +
+                      x + "_" + self.jplrl + ".dat" for x in 'AB']
+
+        return [path.join(pdir, x) for x in pfiles]
+
+    def download(self):
+        """Download the remote tar file if it does not exist. This is done with
+        a system call to the external wget program.
+        """
+        # Create necessary directories
+        local_tar_file = self.get_local_tar_file()
+        pdir = path.dirname(local_tar_file)
+        if not path.isdir(pdir):
+            makedirs(pdir)
+
+        # Download tar file, show progress in the screen
+        print "Downloading " + path.basename(local_tar_file) + " ..."
+        call("wget " + self.get_remote_tar_file() + " -O " + local_tar_file,
+             live=True)
+
+    def extract(self):
+        """Extract the list of product file from the the local tar file. This
+        is done with a system call to the external tar program.
+        """
+
+        pfiles = self.get_list_product_files()
+        pdir = path.dirname(pfiles[0])
+        pfiles = [path.basename(x) for x in pfiles]
+
+        # Create necessary directories
+        if not path.isdir(pdir):
+            makedirs(pdir)
+
+        # Extract product file
+        for x in pfiles:
+            print "Extracting "+x+" ..."
+            call("tar -xvzf "+self.get_local_tar_file()+" -C "+pdir+" "+x)
+
+    def make_available(self):
+        """Make the requested product files available.
+
+        If the product files are already available, then just return.
+        If not, and the local tar file already exists, then extract it.
+        Otherwise, download the remoter tar file and extract it.
+        """
+
+        if all([path.isfile(x) for x in self.get_list_product_files()]):
+            pass
+        elif path.isfile(self.get_local_tar_file()):
+            self.extract()
+        else:
+            self.download()
+            self.extract()
+
+
+def parse_args():
+    """Return a parser to take care of the input arguments"""
+
+    # Define the input parser
+    desc = "Manage a local mirror of GRACE L1B data products"
+    epilog = """datarange input argument is of the format:
+           YYYY[MM[DD]][:YYYY[MM[DD]]]
+Where the date before the optional ':'' represents the lower bound of
+the range and the optional date after the : represents the upper
+bound. The optional elements of the date default to the lowest possible
+value for the lower bound and to the maximum possible for the upper
+one. For example,
+    2006    is equivalent to 2006/01/01:2006/12/31
+    2006/02 is equivalent to 2006/02/01:2006/02/28
+
+prod input arguments can be any of:"""
+
+    # append a nicely formatter list of products to the epilog
+    n = len(ProductFile.LIST_L1B_PRODS)
+    for i in range(0, n, 8):
+        epilog += "\n\t" + ', '.join(ProductFile.LIST_L1B_PRODS[i:i+8])
+
+    parser = argparse.ArgumentParser(description=desc, epilog=epilog,
+                        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("-d", "--directory", dest="rpath",
+                        default=None, metavar="rpath",
+                        help="path to local L1B repository")
+    parser.add_argument("daterange",
+                        help="range of dates to make available locally")
+    parser.add_argument("prodlist", nargs='+', metavar="prod",
+                        help="list of products to make available")
+    parser.add_argument("-a", "--aod-release", dest="aodrl",
+                        default=ProductFile.DEF_AOD_RL, metavar="RL",
+                        help="select AOD1B product version")
+    parser.add_argument("-j", "--jpl-release", dest="jplrl",
+                        default=ProductFile.DEF_JPL_RL, metavar="RL",
+                        help="select JPL product version")
+
+    return parser.parse_args()
+
+
+def main():
+    """Parse input arguments and make the requested products available in the
+    local repository for the specified date range
+    """
+
+    # Define list of system utilities that will be used
+    LIST_EXES = ['wget', 'tar']
+
+    # Build parser and parse the input arguments
+    args = parse_args()
+
+    # Check that the required programs are available
+    check_utilities_in_system(LIST_EXES)
+
+    # Get the date range
+    date_range = parse_date_range(args.daterange)
+
+    # Get the list of products
+    list_prods = args.prodlist
+
+    # Check that requested products are valid
+    for x in list_prods:
+        if x.upper() not in ProductFile.LIST_L1B_PRODS:
+            raise ValueError("Wrong product: "+x.upper())
+
+    # Initialize local repository
+    repo = LocalRepository(args.rpath)
+
+    # download files
+    for pdate in range_date(*date_range, delta=timedelta(days=1)):
+        for ptype in list_prods:
+
+            # Build each product
+            dfile = ProductFile(repo, ptype, pdate, args.aodrl, args.jplrl)
+
+            # Make it available locally
+            dfile.make_available()
+
+    print "Done!"
+
+#This idiom means the below code only runs when executed from command line
+if __name__ == '__main__':
+    main()
